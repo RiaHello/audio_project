@@ -50,6 +50,7 @@ async def validation_error_handler(
     messages = {
         "upload": "请求缺少 file 或字段类型不正确。",
         "asr": "请求缺少 audio_id 或字段类型不正确。",
+        "extract": "请求缺少 text、city 或字段类型不正确。",
     }
     return JSONResponse(
         status_code=422,

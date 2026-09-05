@@ -1,6 +1,6 @@
 # 语音约碰面地点
 
-按住说话，找出同一座城市里两个人之间的碰面地点。当前版本包含健康检查、本地录音、上传和语音识别。前端尚未调用 `/asr`。
+按住说话，找出同一座城市里两个人之间的碰面地点。当前版本包含健康检查、本地录音、上传、语音识别和地址提取。前端尚未调用 `/extract`。
 
 ## 环境
 
@@ -290,6 +290,139 @@ curl -sS -D - -X POST http://127.0.0.1:8003/asr \
 若百炼超时：`504` / `UPSTREAM_TIMEOUT`。  
 若百炼 HTTP 或业务失败：`502` / `UPSTREAM_ERROR`。  
 若返回结构无法解析：`502` / `MODEL_OUTPUT_INVALID`。
+
+## 如何验证 POST /extract
+
+后端改代码后需重启 `uvicorn`。本轮未接前端。提示词在 `backend/prompts/extract.txt`。
+
+模型内部 JSON 含 `party_count`、`incomplete_reason` 等诊断字段；接口成功时只返回五个业务字段，不会把诊断字段传给调用方。模型 JSON 非法、缺字段或类型错误返回 `502` / `MODEL_OUTPUT_INVALID`，不要理解成用户没说清楚。
+
+### Mock（无费用）
+
+```bash
+cd backend
+source .venv/bin/activate
+pytest tests/test_extract.py
+```
+
+不能证明真实 DeepSeek 已跑通。
+
+### 真实调用（需要 DEEPSEEK_API_KEY，会产生费用）
+
+请你确认后再执行。在 <http://localhost:8003/docs> 打开 `POST /extract`，Try it out，粘贴下面请求体。
+
+**1. 正常提取**
+
+```json
+{
+  "text": "我在杭州东站，朋友在西湖龙翔桥地铁站，帮我们找个中间的咖啡店。",
+  "city": "杭州"
+}
+```
+
+模型原始输出（内部，不会原样返回）类似：
+
+```json
+{
+  "city_a": "杭州",
+  "address_a": "杭州东站",
+  "city_b": "杭州",
+  "address_b": "西湖龙翔桥地铁站",
+  "category": "咖啡店",
+  "party_count": 2,
+  "incomplete_reason": null
+}
+```
+
+接口最终返回 `200`：
+
+```json
+{
+  "request_id": "……",
+  "data": {
+    "city_a": "杭州",
+    "address_a": "杭州东站",
+    "city_b": "杭州",
+    "address_b": "西湖龙翔桥地铁站",
+    "category": "咖啡店"
+  }
+}
+```
+
+**2. 口述未提城市，使用页面城市**
+
+```json
+{
+  "text": "我在东站，朋友在龙翔桥地铁站，找个咖啡店。",
+  "city": "杭州"
+}
+```
+
+预期仍为杭州两地；`data` 五个字段，不出现 `party_count`。
+
+**3. 类别归一化（喝咖啡 → 咖啡店）**
+
+```json
+{
+  "text": "我在杭州东站，朋友在龙翔桥地铁站，找个地方喝咖啡。",
+  "city": "杭州"
+}
+```
+
+预期 `category` 为 `咖啡店`。
+
+**4. 地址缺失 → 422 EXTRACT_INCOMPLETE**
+
+```json
+{
+  "text": "我在杭州东站，朋友也过来，帮我们找个咖啡店。",
+  "city": "杭州"
+}
+```
+
+模型可能输出 `address_b: null`、`incomplete_reason: "missing_address"`。接口返回：
+
+```json
+{
+  "request_id": "……",
+  "error": {
+    "code": "EXTRACT_INCOMPLETE",
+    "message": "没听清两个人的具体地点，请再说一次各自所在的站名或地址。",
+    "stage": "extract"
+  }
+}
+```
+
+**5. 「我家」含糊表达 → 422 EXTRACT_INCOMPLETE**
+
+```json
+{
+  "text": "我在我家，朋友在杭州东站，找个咖啡店。",
+  "city": "杭州"
+}
+```
+
+**6. 人数不符 → 422 PARTY_COUNT_INVALID**
+
+```json
+{
+  "text": "我、小李和小王，我在杭州东站，他们在龙翔桥地铁站，找咖啡店。",
+  "city": "杭州"
+}
+```
+
+**7. 跨城 → 422 CROSS_CITY**
+
+```json
+{
+  "text": "我在杭州东站，朋友在上海虹桥火车站，找个咖啡店。",
+  "city": "杭州"
+}
+```
+
+缺 `text` 或 `city`：`422` / `VALIDATION_ERROR`。  
+DeepSeek 超时：`504` / `UPSTREAM_TIMEOUT`。  
+上游失败：`502` / `UPSTREAM_ERROR`。
 
 ## 健康检查
 
