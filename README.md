@@ -1,6 +1,6 @@
 # 语音约碰面地点
 
-按住说话，找出同一座城市里两个人之间的碰面地点。当前版本包含健康检查、本地录音、上传、语音识别和地址提取。前端尚未调用 `/extract`。
+按住说话，找出同一座城市里两个人之间的碰面地点。当前版本包含健康检查、本地录音、上传、语音识别、地址提取、中点搜店、推荐语和语音。前端尚未调用业务接口。
 
 ## 环境
 
@@ -423,6 +423,294 @@ pytest tests/test_extract.py
 缺 `text` 或 `city`：`422` / `VALIDATION_ERROR`。  
 DeepSeek 超时：`504` / `UPSTREAM_TIMEOUT`。  
 上游失败：`502` / `UPSTREAM_ERROR`。
+
+## 如何验证 POST /search
+
+后端改代码后需重启 `uvicorn`。本轮未接前端。`/search` 总预算 20 秒：双方地理编码各 4 秒，2000 米周边 4 秒，必要时 5000 米再 4 秒。
+
+高德 `location` 是 **经度在前、纬度在后** 的 `lng,lat`。中点是两地经度、纬度分别算术平均，保留 6 位小数，坐标系保持高德 GCJ-02，不转 WGS84。`distance_to_midpoint_m` 只表示店铺到这个地理中点的距离（优先用高德返回的有效数值，缺失则用 Haversine，地球半径 6371000 米），**不是**双方出行时间，也不能理解成「两个人路上一样久」。
+
+定位校验会看城市、匹配级别、地点名称和地址。多个候选必须全部两两比较；只有核心地名相同且最大间距 ≤ 150 米才合并。相距约 300 米的不同候选不会自动当成同一地点。无法可靠区分时返回 `GEO_AMBIGUOUS`。
+
+成功时把结果写到 `backend/storage/search/<search_id>/result.json`，含 `created_at`（UTC），供后续 `/finalize` 使用。`search_id` 是 UUID，不是文件路径。
+
+### Mock（无费用，不调用高德）
+
+不能证明真实高德已跑通：
+
+```bash
+cd backend
+source .venv/bin/activate
+pytest tests/test_search.py
+```
+
+覆盖：正常搜店并按距离排序、最多 3 家、缺失距离不填 0、2000 米为空时扩大到 5000 米、定位不明确、无法定位、无候选、超时 504、上游失败 502、缺字段 422。同时核对经度在前、中点为算术平均。
+
+### 真实调用（需要 AMAP_API_KEY，会产生调用次数）
+
+请你确认后再执行。密钥填在 `backend/.env` 的 `AMAP_API_KEY`，使用 Web 服务类型 Key。在 <http://localhost:8003/docs> 打开 `POST /search`，Try it out，或用 curl。
+
+**1. 正常搜店**
+
+```bash
+curl -sS -D - -X POST http://127.0.0.1:8003/search \
+  -H "Content-Type: application/json" \
+  -d '{
+    "city_a": "杭州",
+    "address_a": "杭州东站",
+    "city_b": "杭州",
+    "address_b": "西湖龙翔桥地铁站",
+    "category": "咖啡店"
+  }'
+```
+
+预期 `200`，结构示例（坐标和店名以高德实时结果为准）：
+
+```json
+{
+  "request_id": "……",
+  "data": {
+    "search_id": "s9f8e7d6-c5b4-3210-aaaa-bbbbccccdddd",
+    "midpoint": {
+      "longitude": 120.210123,
+      "latitude": 30.274456
+    },
+    "pois": [
+      {
+        "name": "某咖啡店湖滨店",
+        "address": "杭州市上城区湖滨路1号",
+        "distance_to_midpoint_m": 320
+      }
+    ]
+  }
+}
+```
+
+核对方法：
+
+1. `search_id` 为 UUID；`backend/storage/search/<search_id>/result.json` 存在且含 `created_at`、`midpoint`、`pois`。
+2. 打开该文件中的 `point_a.longitude` / `point_a.latitude` 与 `point_b`，确认与高德 `location` 一致：**第一个数是经度，第二个是纬度**。杭州大约是经度 `120`、纬度 `30`，如果看到 `30.x, 120.x` 则顺序反了。
+3. 中点应为 `((lng_a + lng_b) / 2, (lat_a + lat_b) / 2)`，与 `data.midpoint` 一致（6 位小数）。
+4. `pois` 最多 3 家，`distance_to_midpoint_m` 升序；这是到中点的米数，不要据此说两人出行时间相同。
+5. 若 2000 米没有有效店，后端会再查 5000 米；`result.json` 里的 `radius_m` 为实际采用的半径。
+
+**2. 定位不明确 → 422 GEO_AMBIGUOUS**
+
+用容易对应多个地点的名称，例如只说「西湖」：
+
+```json
+{
+  "city_a": "杭州",
+  "address_a": "西湖",
+  "city_b": "杭州",
+  "address_b": "杭州东站",
+  "category": "咖啡店"
+}
+```
+
+若高德返回多个无法按 150 米 + 同一核心地名合并的候选，接口返回：
+
+```json
+{
+  "request_id": "……",
+  "error": {
+    "code": "GEO_AMBIGUOUS",
+    "message": "找到多个可能的地点，请补充更具体的站名、出入口或地址。",
+    "stage": "search"
+  }
+}
+```
+
+真实高德若碰巧只命中一个可接受结果，会返回 200；**「300 米内不当成同一地点」以 Mock 用例为准**。
+
+**3. 无法定位 → 422 GEO_UNRESOLVED**
+
+```json
+{
+  "city_a": "杭州",
+  "address_a": "不存在的某某路99999号",
+  "city_b": "杭州",
+  "address_b": "杭州东站",
+  "category": "咖啡店"
+}
+```
+
+```json
+{
+  "request_id": "……",
+  "error": {
+    "code": "GEO_UNRESOLVED",
+    "message": "地点无法定位，请说更具体的站名或地址。",
+    "stage": "search"
+  }
+}
+```
+
+**4. 无候选 → 422 NO_POI**
+
+真实高德对 `keywords` 较宽，不一定能稳定造出空结果。确定性空候选请跑 Mock。若要尝试真实调用，可把 `category` 换成无意义词，例如 `不存在的店铺类型xyz`；若高德仍返回店铺，属于供应商召回，不代表本接口排序或扩大半径逻辑失效。
+
+预期结构：
+
+```json
+{
+  "request_id": "……",
+  "error": {
+    "code": "NO_POI",
+    "message": "中点附近没有找到合适的店，请换一个更具体的地点或类别再试。",
+    "stage": "search"
+  }
+}
+```
+
+缺字段：`422` / `VALIDATION_ERROR`。  
+高德超时：`504` / `UPSTREAM_TIMEOUT`。  
+高德 HTTP 或 `status`/`infocode` 失败：`502` / `UPSTREAM_ERROR`。  
+未填 `AMAP_API_KEY`：同样是 `502` / `UPSTREAM_ERROR`，不会发起有效查询。
+
+模拟故障（不打真实高德）：`pytest tests/test_search.py` 中的超时、上游失败、无候选、定位不明确用例。
+
+## 如何验证 POST /finalize 与 GET /audio/{audio_id}
+
+后端改代码后需重启 `uvicorn`。本轮未接前端。推荐语提示词在 `backend/prompts/reply.txt`。只根据搜索结果里**第一家有效店**写推荐语，店名和地址必须原样出现；TTS 使用 `qwen3-tts-flash`、音色 Cherry、`language_type=Chinese`。
+
+超时：推荐语 15 秒；TTS 20 秒；音频下载 8 秒。推荐语失败返回 502 或 504。推荐语成功后，TTS 或下载失败仍返回 200，保留 `reply_text`，`audio_url` 为 `null`，`warning` 说明原因。
+
+音频按文件内容识别格式后保存（例如 WAV 魔数 `RIFF...WAVE`），**不根据 URL 后缀改名**。`GET /audio/{audio_id}` 成功时返回音频二进制和对应 `Content-Type`；失败时仍用统一 JSON 错误。
+
+### Mock（无费用）
+
+不能证明真实 DeepSeek / TTS 已跑通：
+
+```bash
+cd backend
+source .venv/bin/activate
+pytest tests/test_finalize.py
+```
+
+覆盖：推荐语 + 语音成功并播放、只使用第一家店、TTS 失败文字降级、下载内容无法识别为音频时降级、按魔数而不是 `.wav` 后缀保存、推荐语超时 504、改写店名 502、`search_id` 不存在或过期 404、缺字段 422、音频不存在 404。
+
+### 真实调用（需要 AMAP_API_KEY、DEEPSEEK_API_KEY、BAILIAN_API_KEY，会产生费用）
+
+请你确认后再执行。先搜店，再把返回的 `search_id` 交给 `/finalize`，再用返回的 `audio_url` 拉音频。
+
+**1. 先搜索，记下 search_id**
+
+```bash
+curl -sS -X POST http://127.0.0.1:8003/search \
+  -H "Content-Type: application/json" \
+  -d '{
+    "city_a": "杭州",
+    "address_a": "杭州东站",
+    "city_b": "杭州",
+    "address_b": "西湖龙翔桥地铁站",
+    "category": "咖啡店"
+  }'
+```
+
+从响应里复制 `data.search_id`，并记下 `data.pois[0].name` 与 `data.pois[0].address`（推荐语必须包含这两项原文）。
+
+**2. 生成推荐语和语音**
+
+把 `粘贴search_id` 换成上一步的编号：
+
+```bash
+curl -sS -D - -X POST http://127.0.0.1:8003/finalize \
+  -H "Content-Type: application/json" \
+  -d '{"search_id":"粘贴search_id"}'
+```
+
+正常（含语音）应为 `200`：
+
+```json
+{
+  "request_id": "……",
+  "data": {
+    "reply_text": "推荐你们在中点附近的某咖啡店湖滨店碰面，地址是杭州市上城区湖滨路1号，距离中点约三百米。",
+    "audio_url": "http://localhost:8003/audio/t0t1t2t3-aaaa-bbbb-cccc-ddddeeeeffff",
+    "warning": null
+  }
+}
+```
+
+核对：`reply_text` 含第一家店的**原样**店名和地址；`audio_url` 是 `http://localhost:8003/audio/` 加 UUID；`backend/storage/audio/<audio_id>/meta.json` 的 `kind` 为 `tts`，`content_type` 应与真实文件一致（常见为 `audio/wav`），`stored_name` 例如 `speech.wav`。
+
+**3. 播放 / 下载音频**
+
+浏览器打开返回的 `audio_url`，或：
+
+```bash
+curl -sS -D - -o /tmp/meetup-tts.bin \
+  "http://127.0.0.1:8003/audio/粘贴audio_id"
+```
+
+预期：HTTP `200`，`Content-Type` 为 `audio/wav`（或以实际探测结果为准，不要只看扩展名）。再用 ffprobe 看真实容器，而不是把文件改成 `.wav` 再宣称格式正确：
+
+```bash
+ffprobe -v error -show_entries format=format_name \
+  -show_entries stream=codec_name,codec_type \
+  -of default=nw=1 \
+  /tmp/meetup-tts.bin
+```
+
+常见结果：`format_name=wav`，音频编码为 PCM。
+
+**4. 文字降级（推荐语成功、语音失败）**
+
+真实 TTS 正常时不会走到降级。确定性降级请跑 Mock：
+
+```bash
+pytest tests/test_finalize.py -k "tts_fails or download_format"
+```
+
+预期结构（HTTP 仍为 `200`）：
+
+```json
+{
+  "request_id": "……",
+  "data": {
+    "reply_text": "推荐你们在中点附近的某咖啡店湖滨店碰面，地址是杭州市上城区湖滨路1号，距离中点约三百米。",
+    "audio_url": null,
+    "warning": "语音合成失败，已为你保留文字推荐。"
+  }
+}
+```
+
+不要为了测降级去改 `.env` 密钥。推荐语本身失败才是错误响应：DeepSeek 超时 `504` / `UPSTREAM_TIMEOUT`；格式异常或改写店名地址 `502` / `MODEL_OUTPUT_INVALID`；上游失败 `502` / `UPSTREAM_ERROR`。
+
+**5. search_id 不存在或过期**
+
+```bash
+curl -sS -D - -X POST http://127.0.0.1:8003/finalize \
+  -H "Content-Type: application/json" \
+  -d '{"search_id":"00000000-0000-0000-0000-000000000000"}'
+```
+
+- 状态码：`404`
+- `code`：`SEARCH_NOT_FOUND`
+- `stage`：`finalize`
+
+**6. 音频不存在**
+
+```bash
+curl -sS -D - http://127.0.0.1:8003/audio/00000000-0000-0000-0000-000000000000
+```
+
+- 状态码：`404`
+- 响应是 JSON，不是音频：
+
+```json
+{
+  "request_id": "……",
+  "error": {
+    "code": "AUDIO_NOT_FOUND",
+    "message": "音频不存在或已过期。",
+    "stage": "audio"
+  }
+}
+```
+
+缺 `search_id`：`422` / `VALIDATION_ERROR`。
 
 ## 健康检查
 
