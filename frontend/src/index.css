@@ -1,0 +1,200 @@
+:root {
+  --paper: #f4efe4;
+  --ink: #1c1914;
+  --muted: #6d6458;
+  --seal: #b42318;
+  --line: #d7cfc0;
+  --ok: #2f6b3a;
+  --bad: #9b2c2c;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  font-family: "Noto Sans SC", sans-serif;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at 12% 18%, rgba(180, 35, 24, 0.08), transparent 28%),
+    linear-gradient(180deg, #f7f3ea 0%, var(--paper) 100%);
+}
+
+.page {
+  max-width: 42rem;
+  margin: 0 auto;
+  padding: 4.5rem 1.5rem 5rem;
+}
+
+.eyebrow {
+  margin: 0 0 0.75rem;
+  letter-spacing: 0.18em;
+  font-size: 0.75rem;
+  color: var(--seal);
+}
+
+h1 {
+  margin: 0;
+  font-family: "ZCOOL XiaoWei", serif;
+  font-size: clamp(2.4rem, 6vw, 3.6rem);
+  font-weight: 400;
+  line-height: 1.15;
+}
+
+.lede {
+  margin: 1rem 0 0;
+  max-width: 32rem;
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+.ticket {
+  margin-top: 2.75rem;
+  padding: 1.4rem 1.5rem 1.2rem;
+  border: 1px solid var(--line);
+  background: rgba(255, 252, 246, 0.88);
+}
+
+.ticket-row,
+.city-select {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+  padding: 0.7rem 0;
+}
+
+.ticket-row,
+.city-select + .ticket-row {
+  border-top: 1px dashed var(--line);
+}
+
+.city-select input {
+  width: 10rem;
+  padding: 0.25rem 0.45rem;
+  border: 1px solid var(--line);
+  background: #fffdf8;
+  color: var(--ink);
+  font: inherit;
+  text-align: right;
+}
+
+.city-select input:focus {
+  outline: 2px solid rgba(180, 35, 24, 0.35);
+  outline-offset: 1px;
+}
+
+.label {
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.status-checking {
+  color: var(--muted);
+}
+
+.status-ok {
+  color: var(--ok);
+}
+
+.status-error {
+  color: var(--bad);
+}
+
+.request-id {
+  margin: 0.85rem 0 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  word-break: break-all;
+}
+
+.recorder {
+  margin-top: 2rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.85rem;
+}
+
+.record-button {
+  width: 9.5rem;
+  height: 9.5rem;
+  border: 0;
+  border-radius: 999px;
+  background: var(--seal);
+  color: #fffdf8;
+  font-family: "ZCOOL XiaoWei", serif;
+  font-size: 1.35rem;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.record-button:disabled {
+  cursor: not-allowed;
+  background: #b7aea3;
+}
+
+.record-button.is-recording {
+  animation: pulse 1.1s ease-in-out infinite;
+}
+
+.record-button:focus-visible {
+  outline: 3px solid rgba(180, 35, 24, 0.45);
+  outline-offset: 4px;
+}
+
+@keyframes pulse {
+  50% {
+    transform: scale(1.04);
+  }
+}
+
+.recorder-hint,
+.clip-meta {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+  text-align: center;
+}
+
+.recorder-error {
+  margin: 0;
+  color: var(--bad);
+  text-align: center;
+}
+
+.text-button,
+.download-link {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--seal);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+.clip {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1rem 0 0;
+  border-top: 1px dashed var(--line);
+}
+
+.clip-player {
+  width: 100%;
+}
